@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import json
+import os
 
 # Set page configuration
 st.set_page_config(
@@ -16,21 +17,14 @@ st.set_page_config(
 # Default data - used when initializing the app for the first time
 default_model_data = {
     "name": ["NTRM-Stem", "NTRM-Lamina", "NTRM-0.6ft", "NTRM-2_cams", "NTRM-yolo_v11n"],
-    "map50": [0.86, 0.82, 0.89, 0.84, 0.81],
-    "map50_95": [0.72, 0.68, 0.76, 0.70, 0.65],
-    "iou": [0.78, 0.75, 0.81, 0.77, 0.73],
+    "map50": [0.00, 0.00, 0.47, 0.37, 0.62],
+    "map50_95": [0.00, 0.00, 0.4, 0.31, 0.58],
+    "iou": [0.00, 0.00, 0.52, 0.51, 0.63],
     "training_time": ["5h 20m", "8h 15m", "6h 45m", "7h 30m", "4h 50m"],
-    "last_updated": ["2025-05-08", "2025-05-03", "2025-05-10", "2025-04-28", "2025-05-12"],
+    "last_updated": ["2025-05-13", "2025-05-13", "2025-05-13", "2025-05-13", "2025-05-13"],
     "status": ["Production", "Production", "Production", "Testing", "Development"],
     "model_file": ["", "", "", "", ""]
 }
-
-# Initialize session state for persistent storage
-if 'model_data' not in st.session_state:
-    st.session_state.model_data = pd.DataFrame(default_model_data)
-
-if 'model_files' not in st.session_state:
-    st.session_state.model_files = {}
 
 # Generate default historical data
 def generate_default_history_data():
@@ -65,26 +59,105 @@ def generate_default_history_data():
     
     return pd.DataFrame(history_data)
 
-if 'history_data' not in st.session_state:
-    st.session_state.history_data = generate_default_history_data()
+# File paths for persistent storage 
+MODEL_DATA_FILE = ".streamlit/model_data.json"
+HISTORY_DATA_FILE = ".streamlit/history_data.json"
+MODEL_FILES_DIR = ".streamlit/model_files/"
 
-# Function to save model file to session state
+# Create directory if it doesn't exist
+os.makedirs(".streamlit", exist_ok=True)
+os.makedirs(MODEL_FILES_DIR, exist_ok=True)
+
+# Function to load model data from file
+def load_model_data():
+    try:
+        if os.path.exists(MODEL_DATA_FILE):
+            df = pd.read_json(MODEL_DATA_FILE)
+            return df
+        else:
+            # Initialize with default data
+            df = pd.DataFrame(default_model_data)
+            df.to_json(MODEL_DATA_FILE)
+            return df
+    except Exception as e:
+        st.error(f"Error loading model data: {e}")
+        return pd.DataFrame(default_model_data)
+
+# Function to load history data from file
+def load_history_data():
+    try:
+        if os.path.exists(HISTORY_DATA_FILE):
+            df = pd.read_json(HISTORY_DATA_FILE)
+            # Convert date strings back to timestamps
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+            return df
+        else:
+            # Initialize with default history data
+            df = generate_default_history_data()
+            df.to_json(HISTORY_DATA_FILE)
+            return df
+    except Exception as e:
+        st.error(f"Error loading history data: {e}")
+        return generate_default_history_data()
+
+# Function to save model data to file
+def save_model_data(df):
+    try:
+        df.to_json(MODEL_DATA_FILE)
+    except Exception as e:
+        st.error(f"Error saving model data: {e}")
+
+# Function to save history data to file
+def save_history_data(df):
+    try:
+        df.to_json(HISTORY_DATA_FILE)
+    except Exception as e:
+        st.error(f"Error saving history data: {e}")
+
+# Function to save model file to disk
 def save_model_file(model_name, uploaded_file):
     # Clean model name for filename
     safe_name = "".join([c if c.isalnum() else "_" for c in model_name])
     filename = f"{safe_name}.pt"
+    file_path = os.path.join(MODEL_FILES_DIR, filename)
     
-    # In Streamlit Cloud, we store the file content in session state
-    st.session_state.model_files[filename] = uploaded_file.getvalue()
+    try:
+        # Save file to disk
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getvalue())
+        return filename
+    except Exception as e:
+        st.error(f"Error saving model file: {e}")
+        return ""
+
+# Function to load a model file from disk
+def load_model_file(filename):
+    file_path = os.path.join(MODEL_FILES_DIR, filename)
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                return f.read()
+        return None
+    except Exception as e:
+        st.error(f"Error loading model file: {e}")
+        return None
+
+# Function to delete a model file from disk
+def delete_model_file(filename):
+    if not filename:
+        return
     
-    return filename
+    file_path = os.path.join(MODEL_FILES_DIR, filename)
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        st.error(f"Error deleting model file: {e}")
 
 # Function to delete a model
-def delete_model(model_name):
+def delete_model(model_name, df, history_df):
     # Get the model file name if it exists
-    df = st.session_state.model_data
-    history_df = st.session_state.history_data
-    
     model_file = ""
     model_row = df[df["name"] == model_name]
     if not model_row.empty and model_row.iloc[0]["model_file"]:
@@ -97,20 +170,17 @@ def delete_model(model_name):
     history_df = history_df[history_df["model"] != model_name]
     
     # Delete model file if it exists
-    if model_file and model_file in st.session_state.model_files:
-        del st.session_state.model_files[model_file]
+    if model_file:
+        delete_model_file(model_file)
     
     # Save updated data
-    st.session_state.model_data = df
-    st.session_state.history_data = history_df
+    save_model_data(df)
+    save_history_data(history_df)
     
     return df, history_df
 
 # Function to rename a model
-def rename_model(old_name, new_name):
-    df = st.session_state.model_data
-    history_df = st.session_state.history_data
-    
+def rename_model(old_name, new_name, df, history_df):
     # Update model name in main DataFrame
     df.loc[df["name"] == old_name, "name"] = new_name
     
@@ -129,20 +199,31 @@ def rename_model(old_name, new_name):
         # Update file name in DataFrame
         df.loc[df["name"] == new_name, "model_file"] = new_file
         
-        # Rename actual file in session state
-        if old_file in st.session_state.model_files:
-            st.session_state.model_files[new_file] = st.session_state.model_files[old_file]
-            del st.session_state.model_files[old_file]
+        # Rename actual file on disk
+        old_path = os.path.join(MODEL_FILES_DIR, old_file)
+        new_path = os.path.join(MODEL_FILES_DIR, new_file)
+        
+        try:
+            if os.path.exists(old_path):
+                # Read old file and save as new file
+                with open(old_path, "rb") as f:
+                    file_content = f.read()
+                with open(new_path, "wb") as f:
+                    f.write(file_content)
+                # Delete old file
+                os.remove(old_path)
+        except Exception as e:
+            st.error(f"Error renaming model file: {e}")
     
     # Save updated data
-    st.session_state.model_data = df
-    st.session_state.history_data = history_df
+    save_model_data(df)
+    save_history_data(history_df)
     
     return df, history_df
 
-# Load data from session state
-df = st.session_state.model_data
-history_df = st.session_state.history_data
+# Load data from persistent storage
+df = load_model_data()
+history_df = load_history_data()
 
 # Main App Header
 st.title("NTRM Object Detection Models Dashboard")
@@ -399,7 +480,7 @@ with main_tabs[1]:  # Model Management tab
                         }
                         
                         df = pd.concat([df, pd.DataFrame([new_model])], ignore_index=True)
-                        st.session_state.model_data = df
+                        save_model_data(df)
                         
                         # Add historical data point if specified
                         if add_history and history_date:
@@ -411,9 +492,10 @@ with main_tabs[1]:  # Model Management tab
                             }
                             
                             history_df = pd.concat([history_df, pd.DataFrame([new_history])], ignore_index=True)
-                            st.session_state.history_data = history_df
+                            save_history_data(history_df)
                         
                         st.success(f"Model '{model_name}' added successfully!")
+                        st.rerun()
                 else:
                     st.error("Please fill in all required fields (Model Name and Training Time)")
     
@@ -484,8 +566,9 @@ with main_tabs[1]:  # Model Management tab
                         df.loc[df["name"] == model_to_update, "status"] = u_status
                         df.loc[df["name"] == model_to_update, "last_updated"] = datetime.now().strftime("%Y-%m-%d")
                         
-                        st.session_state.model_data = df
+                        save_model_data(df)
                         st.success(f"Model '{model_to_update}' updated successfully!")
+                        st.rerun()
                     
                     else:  # Add Historical Data Point
                         # Add new historical data point
@@ -497,8 +580,9 @@ with main_tabs[1]:  # Model Management tab
                         }
                         
                         history_df = pd.concat([history_df, pd.DataFrame([new_history])], ignore_index=True)
-                        st.session_state.history_data = history_df
+                        save_history_data(history_df)
                         st.success(f"Historical data point added for '{model_to_update}'!")
+                        st.rerun()
         else:
             st.info("No models available to update. Please add a model first.")
 
@@ -519,8 +603,9 @@ with main_tabs[1]:  # Model Management tab
                             st.error(f"A model with the name '{new_model_name}' already exists. Please use a different name.")
                         else:
                             # Rename the model
-                            df, history_df = rename_model(model_to_rename, new_model_name)
+                            df, history_df = rename_model(model_to_rename, new_model_name, df, history_df)
                             st.success(f"Model '{model_to_rename}' has been renamed to '{new_model_name}'!")
+                            st.rerun()
                     else:
                         st.error("Please provide a new name for the model.")
         else:
@@ -542,8 +627,9 @@ with main_tabs[1]:  # Model Management tab
                 if delete_submitted:
                     if confirm_delete:
                         # Delete the model
-                        df, history_df = delete_model(model_to_delete)
+                        df, history_df = delete_model(model_to_delete, df, history_df)
                         st.success(f"Model '{model_to_delete}' has been deleted successfully!")
+                        st.rerun()
                     else:
                         st.error("Please confirm deletion by checking the confirmation box.")
         else:
@@ -566,11 +652,12 @@ with main_tabs[1]:  # Model Management tab
                     st.text(f"File: {row['model_file']}")
                 
                 with col2:
-                    # In Streamlit Cloud, we can download files stored in session state
-                    if row['model_file'] in st.session_state.model_files:
+                    # Load file from disk
+                    file_content = load_model_file(row['model_file'])
+                    if file_content:
                         st.download_button(
                             label="Download Model",
-                            data=st.session_state.model_files[row['model_file']],
+                            data=file_content,
                             file_name=row['model_file'],
                             mime="application/octet-stream",
                             key=f"download_{idx}"
@@ -586,11 +673,10 @@ with main_tabs[1]:  # Model Management tab
                             # Remove the file reference from the dataframe
                             df.loc[idx, "model_file"] = ""
                             
-                            # Remove the file from session state
-                            if row['model_file'] in st.session_state.model_files:
-                                del st.session_state.model_files[row['model_file']]
+                            # Delete the physical file
+                            delete_model_file(row['model_file'])
                             
-                            st.session_state.model_data = df
+                            save_model_data(df)
                             st.success(f"Model file for {row['name']} removed successfully!")
                             st.rerun()
                 
@@ -600,12 +686,110 @@ with main_tabs[1]:  # Model Management tab
 
 with st.sidebar:
     st.markdown("---")
-    if st.button("Reset to Default Data (Dev only)"):
-        st.session_state.model_data = pd.DataFrame(default_model_data)
-        st.session_state.history_data = generate_default_history_data()
-        st.session_state.model_files = {}
-        st.success("Reset to default data!")
-        st.rerun()
+    if st.button("Reset Dashboard to Default Data"):
+        # Ask for confirmation
+        reset_confirm = st.checkbox("I understand this will reset all models and data to default. This cannot be undone.")
+        
+        if reset_confirm:
+            # Reset to default data
+            df = pd.DataFrame(default_model_data)
+            history_df = generate_default_history_data()
+            
+            # Save the default data
+            save_model_data(df)
+            save_history_data(history_df)
+            
+            # Delete any model files
+            for file in os.listdir(MODEL_FILES_DIR):
+                if file.endswith(".pt"):
+                    os.remove(os.path.join(MODEL_FILES_DIR, file))
+            
+            st.success("Dashboard reset to default data!")
+            st.rerun()
+        else:
+            st.warning("Please confirm reset by checking the confirmation box.")
+    
+    # Export/Import functionality
+    st.markdown("---")
+    st.subheader("Export/Import Data")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Export database
+        if st.button("Export Data"):
+            # Combine model and history data into a single export
+            export_data = {
+                "models": df.to_dict(orient="records"),
+                "history": history_df.to_dict(orient="records")
+            }
+            
+            # Convert to JSON
+            export_json = json.dumps(export_data, default=str)
+            
+            # Create download button
+            st.download_button(
+                label="Download JSON",
+                data=export_json,
+                file_name="ntrm_model_data.json",
+                mime="application/json"
+            )
+    
+    with col2:
+        # Import database
+        uploaded_json = st.file_uploader("Import Data", type=["json"])
+        
+        if uploaded_json:
+            try:
+                # Read JSON data
+                import_data = json.loads(uploaded_json.read().decode())
+                
+                if st.button("Apply Imported Data"):
+                    # Confirm before proceeding
+                    import_confirm = st.checkbox("I understand this will override current data")
+                    
+                    if import_confirm:
+                        # Update dataframes
+                        if "models" in import_data:
+                            df = pd.DataFrame(import_data["models"])
+                        
+                        if "history" in import_data:
+                            history_df = pd.DataFrame(import_data["history"])
+                            # Convert date strings back to timestamps
+                            if "date" in history_df.columns:
+                                history_df["date"] = pd.to_datetime(history_df["date"])
+                        
+                        # Save imported data
+                        save_model_data(df)
+                        save_history_data(history_df)
+                        
+                        st.success("Data imported successfully!")
+                        st.rerun()
+                    else:
+                        st.warning("Please confirm import by checking the confirmation box.")
+                
+            except Exception as e:
+                st.error(f"Error importing data: {e}")
+    
+    # About section
+    st.markdown("---")
+    st.markdown("### About")
+    st.markdown("""
+        **NTRM Models Dashboard v1.0**
+        
+        Track and compare object detection models for 
+        Non-tobacco Related Materials detection.
+        
+        © 2025 Tobacco Analysis Department
+    """)
 
+# Add a footer
 st.markdown("---")
-st.markdown(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+st.markdown(
+    """
+    <div style="text-align: center; color: gray; font-size: 0.8em;">
+        NTRM Object Detection Models Dashboard | Last Updated: May 2025
+    </div>
+    """,
+    unsafe_allow_html=True
+)
